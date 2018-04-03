@@ -1,0 +1,74 @@
+#!/bin/bash
+
+set -e
+set -o pipefail
+set -u
+
+function Usage() {
+  echo "$0 CLUSTER cmd [PARAMS] from [from...] to" >&2
+  echo "" >&2
+  echo "  CLUSTER   command for hadoop cli for needed cluster" >&2
+  echo "  cmd       'get', 'put', 'getV', 'putV'" >&2
+  echo "  PARAMS    full list shown by --help param for selected 'cmd'" >&2
+  echo "  from      item to copy from (for get - must be in HDFS, for put - in local FS" >&2
+  echo "  to        item to copy to" >&2
+  echo "" >&2
+  exit 0
+}
+
+function Err() {
+  echo "$( date ) $@" >&2
+  Usage
+}
+
+[ $# -lt 2 ] && Err "Not enough arguments: $#"
+
+CLUSTER_ORIG=$1
+CLUSTER_RAW="$CLUSTER_ORIG"
+shift
+CMD=$1
+shift
+
+[[ $CLUSTER_RAW != hadoop-* ]] && CLUSTER_RAW="hadoop-$CLUSTER_RAW"
+CLUSTER=$( which $CLUSTER_RAW || true )
+if [ ! -x "$CLUSTER" ]
+then
+  Err "Client for cluster '$CLUSTER_ORIG' ('$CLUSTER_RAW') not found"
+fi
+
+## https://stackoverflow.com/questions/59895
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+  DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+##
+
+JAR_PATH="$DIR/../lib/hdfs.jar"
+
+case "$CMD" in
+  get)
+    CMD="org.apache.hadoop.fs.shell.DistributedGet"
+    ;;
+
+  put)
+    CMD="org.apache.hadoop.fs.shell.DistributedPut"
+    ;;
+
+  getV)
+    CMD="org.apache.hadoop.fs.shell.DistributedGet -n"
+    ;;
+
+  putV)
+    CMD="org.apache.hadoop.fs.shell.DistributedPut -n 3"
+    ;;
+
+  *)
+    Err "Command must be either 'get', 'put', 'getV' or 'putV'"
+    ;;
+
+esac
+
+HADOOP_CLASSPATH=$JAR_PATH $CLUSTER $CMD "$@"

@@ -1,0 +1,20 @@
+subprojects {
+    apply plugin: 'java'
+    sourceCompatibility = 1.8
+
+
+    // define all global libraries here (maybe it is good practice to define ALL libraries here - for duplicate exclusion)
+    ext.hadoopCDHVersion = "2.6.0-cdh5.7.1"
+    ext.hbaseCDHVersion = "1.2.0-cdh5.7.1"
+    ext.corefanVersion = "1.7.0"
+
+    ext.libraries = [
+            hadoop_hdfs       : "org.apache.hadoop:hadoop-hdfs:$hadoopCDHVersion",
+            hadoop_common     : "org.apache.hadoop:hadoop-common:$hadoopCDHVersion",
+
+            gson              : 'com.google.code.gson:gson:2.8.0',
+
+//            corefan_spark_testing : "corefan:corefan-spark-testing:$corefanVersion",
+            hbase_client      : "org.apache.hbase:hbase-client:$hbaseCDHVersion",
+    ]
+}

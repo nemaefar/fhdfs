@@ -1,0 +1,12 @@
+version '1.3-SNAPSHOT'
+
+dependencies {
+    compileOnly libraries.hadoop_common
+    compileOnly libraries.hadoop_hdfs
+
+    testCompile libraries.corefan_spark_testing
+
+    testCompile libraries.hadoop_common,
+                libraries.hadoop_hdfs,
+                libraries.hbase_client
+}
