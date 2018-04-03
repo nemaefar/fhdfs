@@ -2,6 +2,13 @@ subprojects {
     apply plugin: 'java'
     sourceCompatibility = 1.8
 
+repositories {
+    mavenCentral()
+    maven {
+       url "https://repository.cloudera.com/artifactory/cloudera-repos/"
+    }
+}
+
 
     // define all global libraries here (maybe it is good practice to define ALL libraries here - for duplicate exclusion)
     ext.hadoopCDHVersion = "2.6.0-cdh5.7.1"
