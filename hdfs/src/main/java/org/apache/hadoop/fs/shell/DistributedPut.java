@@ -24,12 +24,12 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -60,6 +60,10 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
     private AtomicLong trafficInSecond = new AtomicLong(0);
     private AtomicLong trafficTotal = new AtomicLong(0);
+
+    private AtomicLong bytesToProcess = new AtomicLong(0);
+    private AtomicLong bytesProcessed = new AtomicLong(0);
+
     private AtomicInteger filesToProcess = new AtomicInteger(0);
     private AtomicInteger filesDone = new AtomicInteger(0);
     private AtomicInteger blocksDone = new AtomicInteger(0);
@@ -67,6 +71,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
     private AtomicInteger threadsActive = new AtomicInteger(0);
 
     private Instant startTime;
+    private static final int PROGRESS_BAR_WINDOW = 60;
 
     @Option(names = {"-v", "--verbose"}, description = "Verbose mode. Helpful for troubleshooting. " +
             "Multiple -v options increase the verbosity.")
@@ -94,6 +99,9 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
     @Option(names = {"--stat_period"}, description = "Statistics period", hidden = true)
     protected int statisticsPeriod = 1000;
+
+    @Option(names = {"--progress_bar_width"}, description = "Statistics period", hidden = true)
+    protected int progressBarWidth = 100;
 
     @Option(names = {"--distributed_suffix"}, description = "Suffix for file to be detected by distributed get and put", hidden = true)
     protected String distributedSuffix = ".distributed";
@@ -143,6 +151,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             String name = new Path(src).getName();
 
             String dst = args.pollLast();
+            if (dst == null) throw new IOException("Argument list is empty"); // can't be
             if (!dst.endsWith(name))
                 if (dst.endsWith("/")) dst = dst + name;
                 else dst = dst + "/" + name;
@@ -238,6 +247,8 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         long blockSize = getConf().getLong("dfs.blocksize", 128*1024*1024L);
         int bufferSize = getConf().getInt("io.file.buffer.size", 131072);
 
+        bytesToProcess.addAndGet(from.length());
+
         if (from.length() <= blockSize) {
             if (verbose.length > 1)
                 System.err.println("Short-cut for one-block file: " + from.getName());
@@ -283,7 +294,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             if (from.length() % blockSize != 0) blocks++; // protection from files, splittable for exact number of blocks
             if (verbose.length > 1)
                 System.err.println("Will be copying " + blocks + " blocks for '" + from.getName() + "'");
-            AsynchronousFileChannel localIn = AsynchronousFileChannel.open(from.toPath(), StandardOpenOption.READ);
+            LazyAsyncFileChannel localIn = new LazyAsyncFileChannel(from.toPath(), StandardOpenOption.READ);
             Path parent = new Path(target.toString() + distributedSuffix);
 
             if (fs.exists(parent)) {
@@ -337,7 +348,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                 }, threadPool));
             }
 
-            return CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).thenApply((v) -> {
+            return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply((v) -> {
                 if (verbose.length > 1)
                     System.err.println("Closing file: " + to);
                 Path attributesFile = new Path(parent, distributedAttributesFile);
@@ -367,7 +378,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         }
     }
 
-    private void putBlock(AsynchronousFileChannel localIn, DistributedFileSystem fs, Path output, long startOffset, long blockSize, int bufferSize, String blockAndFile) throws IOException, InterruptedException {
+    private void putBlock(LazyAsyncFileChannel localIn, DistributedFileSystem fs, Path output, long startOffset, long blockSize, int bufferSize, String blockAndFile) throws IOException, InterruptedException {
         if (verbose.length > 2)
             System.err.println("START Copying block: " + blockAndFile + " with length " + blockSize);
         ByteBuffer buffer = ByteBuffer.allocate(bufferSize * 2);
@@ -380,7 +391,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             buffer.limit((int) Math.min(bufferSize, blockSize - cur));
             Integer readBytes;
             try {
-                readBytes = localIn.read(buffer, startOffset + cur).get();
+                readBytes = localIn.get().read(buffer, startOffset + cur).get();
             } catch (InterruptedException | ExecutionException e) {
                 throw new IOException("Failed to read block data", e);
             }
@@ -402,6 +413,8 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
             writableByteChannel.write(buffer);
 
+            bytesProcessed.addAndGet(readBytes);
+
             buffer.clear();
 
         } while (cur < blockSize);
@@ -413,12 +426,45 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             System.err.println("END Copying block: " + blockAndFile);
     }
 
+
+    private static String progressBar(int percent, int width) {
+        int filled = (int)(width * percent / 100.0);
+
+        char[] bar = new char[width + 2];
+        for (int i = filled + 1; i <= width; i++)
+            bar[i] = ' ';
+
+        for (int i = 1; i <= filled; i++)
+            bar[i] = '=';
+
+        bar[0] = '[';
+        bar[width + 1] = ']';
+
+        return String.valueOf(bar) + ' ' + percent + '%';
+    }
+
+    private static String formatDuration(long estimate, Long avgTrafficInWindow, ChronoUnit chronoUnit) {
+        if (avgTrafficInWindow == null || avgTrafficInWindow == 0L) return "--:-";
+        Duration duration = Duration.of(estimate / avgTrafficInWindow, chronoUnit);
+        return DurationFormatUtils.formatDurationWords(duration.toMillis(), true, true);
+    }
+
     private Runnable statisticsRunnable = () -> {
         try {
             int prevLen = 0;
+            EvictingQueue<Long> trafficWindow = EvictingQueue.create(PROGRESS_BAR_WINDOW);
             while (!Thread.currentThread().isInterrupted()) {
-                String message = String.format("\rSpeed: %s/s Files: %d/%d Blocks: %d Threads: %d ",
-                        FileUtils.byteCountToDisplaySize(trafficInSecond.getAndSet(0L)),
+                long traffic = trafficInSecond.getAndSet(0L);
+                trafficWindow.add(traffic);
+                Long avgTrafficInWindow = trafficWindow.stream().reduce(0L, (a, b) -> a + b) / trafficWindow.size();
+
+                long bTP = bytesToProcess.get();
+                long bP = bytesProcessed.get();
+
+                String message = String.format("\r\t%s\tETA: %s Speed: %s/s Files: %d/%d Blocks: %d Threads: %d ",
+                        progressBar((int) (bP * 100.0 / bTP), progressBarWidth),
+                        formatDuration(bTP - bP, avgTrafficInWindow, ChronoUnit.SECONDS),
+                        FileUtils.byteCountToDisplaySize(traffic),
                         filesDone.get(), filesToProcess.get(), blocksDone.get(), threadsActive.get()
                 );
                 String paddedMessage = StringUtils.rightPad(message, prevLen);
@@ -514,7 +560,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                 if (verbose.length > 1)
                     System.err.println("Finished all submitting " + submitted.size());
                 CountDownLatch latch = new CountDownLatch(1);
-                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[submitted.size()])).thenRunAsync(() -> {
+                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally((t) -> null).thenRunAsync(() -> {
                     try {
                         if (finalizer != null) {
                             if (verbose.length > 1)

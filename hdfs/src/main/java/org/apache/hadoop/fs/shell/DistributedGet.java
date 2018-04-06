@@ -22,10 +22,10 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousFileChannel;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -54,6 +54,10 @@ public class DistributedGet extends CommandWithDestination implements Tool {
     private AtomicInteger flushCycle = new AtomicInteger(0);
     private AtomicLong trafficInSecond = new AtomicLong(0);
     private AtomicLong trafficTotal = new AtomicLong(0);
+
+    private AtomicLong bytesToProcess = new AtomicLong(0);
+    private AtomicLong bytesProcessed = new AtomicLong(0);
+
     private AtomicInteger filesToProcess = new AtomicInteger(0);
     private AtomicInteger filesDone = new AtomicInteger(0);
     private AtomicInteger blocksDone = new AtomicInteger(0);
@@ -61,6 +65,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
     private AtomicInteger threadsActive = new AtomicInteger(0);
 
     private Instant startTime;
+    private static final int PROGRESS_BAR_WINDOW = 60;
 
     @Option(names = {"-v", "--verbose"}, description = "Verbose mode. Helpful for troubleshooting. " +
                                                        "Multiple -v options increase the verbosity.")
@@ -91,6 +96,9 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
     @Option(names = {"--stat_period"}, description = "Statistics period", hidden = true)
     protected int statisticsPeriod = 1000;
+
+    @Option(names = {"--progress_bar_width"}, description = "Statistics period", hidden = true)
+    protected int progressBarWidth = 100;
 
     @Option(names = {"--distributed_suffix"}, description = "Suffix for file to be detected by distributed get and put", hidden = true)
     protected String distributedSuffix = ".distributed";
@@ -233,13 +241,13 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
     protected CompletableFuture<Path> getFile(Path remote, File local) throws IOException {
         filesToProcess.incrementAndGet();
-        File target;
+        File localFile;
         if (local.toString().endsWith("/") || local.isDirectory()) {
             if (!local.exists()) throw new IOException("Target dir doesn't exist: " + local.toString());
-            target = unversionFileName(remote, local);
-        } else target = local;
+            localFile = unversionFileName(remote, local);
+        } else localFile = local;
         if (verbose.length > 1)
-            System.err.println("Copying '" + remote.toString() + "' to '" + target.toString() + "'");
+            System.err.println("Copying '" + remote.toString() + "' to '" + localFile.toString() + "'");
 
         URI nnURI = FileSystem.getDefaultUri(getConf());
 
@@ -250,12 +258,16 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         int bufferSize = getConf().getInt("io.file.buffer.size", 131072);
         DFSInputStream remoteIS = fs.getClient().open(pathName, bufferSize, true);
 
-        AsynchronousFileChannel localOut = AsynchronousFileChannel.open(target.toPath(),
+        LazyAsyncFileChannel localOut = new LazyAsyncFileChannel(localFile.toPath(),
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.CREATE);
 
         if (remoteIS.getFileLength() == 0) { // shortcut for zero-length files
-            return CompletableFuture.completedFuture(new Path(target.toURI()));
+            localOut.get();
+            localOut.close();
+            return CompletableFuture.completedFuture(new Path(localFile.toURI()));
         }
+
+        bytesToProcess.addAndGet(remoteIS.getFileLength());
 
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
@@ -264,19 +276,21 @@ public class DistributedGet extends CommandWithDestination implements Tool {
             futures.add(processBlock(fs, pathName, bufferSize, localOut, block));
         }
 
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).thenApply((v) -> {
+        remoteIS.close();
+
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply((v) -> {
             if (verbose.length > 1)
-                System.err.println("Closing file: " + target.toString());
+                System.err.println("Closing file: " + localFile.toString());
             try {
                 localOut.close();
                 filesDone.incrementAndGet();
             } catch (IOException e) {
                 exceptions.add(e);
                 if (verbose.length > 0)
-                    System.err.println("Failed to close file " + target.toString());
+                    System.err.println("Failed to close file " + localFile.toString());
                 throw new CompletionException(e);
             }
-            return new Path(target.toURI());
+            return new Path(localFile.toURI());
         });
     }
 
@@ -314,7 +328,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
         int bufferSize = getConf().getInt("io.file.buffer.size", 131072);
 
-        AsynchronousFileChannel localOut = AsynchronousFileChannel.open(localFile.toPath(),
+        LazyAsyncFileChannel localOut = new LazyAsyncFileChannel(localFile.toPath(),
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.CREATE);
 
         long offset = 0;
@@ -328,6 +342,8 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 continue;
             }
 
+            bytesToProcess.addAndGet(remoteIS.getFileLength());
+
             List<LocatedBlock> allBlocks = remoteIS.getAllBlocks();
 
             if (allBlocks.size() != 1) {
@@ -340,9 +356,11 @@ public class DistributedGet extends CommandWithDestination implements Tool {
             DistributedBlock block = new DistributedBlock(blockToCopy.getBlock().getBlockName(), blockToCopy.getBlockSize(), offset, 0L);
             futures.add(processBlock(fs, pathName, bufferSize, localOut, block));
             offset += blockToCopy.getBlockSize();
+
+            remoteIS.close();
         }
 
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).thenApply((v) -> {
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply((v) -> {
             if (verbose.length > 1)
                 System.err.println("Closing file: " + localFile.toString());
             try {
@@ -359,8 +377,8 @@ public class DistributedGet extends CommandWithDestination implements Tool {
     }
 
     protected CompletableFuture<Void> processBlock(DistributedFileSystem fs, String pathName, int bufferSize,
-                                AsynchronousFileChannel localOut,
-                                DistributedBlock block) {
+                                                   LazyAsyncFileChannel localOut,
+                                                   DistributedBlock block) {
         return CompletableFuture.runAsync(() -> {
             try {
                 threadsActive.incrementAndGet();
@@ -369,7 +387,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 int retries = 3;
                 while (retries > 0) {
                     try {
-                        if (verbose.length > 1)
+                        if (verbose.length > 2)
                             System.err.println("Copying " + blockAndFile + " retry " + retries);
                         copyBlock(block, fs, pathName, bufferSize, localOut, blockAndFile);
                         Thread.currentThread().setName("Copying thread: waiting");
@@ -393,9 +411,9 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         }, threadPool);
     }
 
-    protected void copyBlock(DistributedBlock block, DistributedFileSystem fs, String fileName, int bufferSize, AsynchronousFileChannel outFile, String blockAndFile) throws IOException, InterruptedException {
+    protected void copyBlock(DistributedBlock block, DistributedFileSystem fs, String fileName, int bufferSize, LazyAsyncFileChannel outFile, String blockAndFile) throws IOException, InterruptedException {
         long len = block.getBlockSize();
-        if (verbose.length > 1)
+        if (verbose.length > 2)
             System.err.println("Copying block: start " + len);
         if (len == 0) {
             System.err.println(blockAndFile + " is zero size");
@@ -428,12 +446,13 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
             try {
                 if (verbose.length > 3)
-                    System.err.println("Writing: " + buffer.remaining() + " pos: " + (block.getStartOffset() + cur - readBytes) + " out: " + outFile.isOpen());
-                Integer written = outFile.write(buffer, block.getStartOffset() + cur - readBytes).get();
+                    System.err.println("Writing: " + buffer.remaining() + " pos: " + (block.getStartOffset() + cur - readBytes) + " out: " + outFile.get().isOpen());
+                Integer written = outFile.get().write(buffer, block.getStartOffset() + cur - readBytes).get();
+                bytesProcessed.addAndGet(written);
                 if (verbose.length > 3)
                     System.err.println("Written: " + written);
                 if (sync && needToFlush()) {
-                    outFile.force(false);
+                    outFile.get().force(false);
                     if (verbose.length > 3)
                         System.err.println("Synced");
                 }
@@ -444,7 +463,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
         } while (cur < block.getBlockSize());
 
-        if (verbose.length > 1)
+        if (verbose.length > 2)
             System.err.println("Copying block: finish " + len + " " + blockAndFile);
         file.close();
         blocksDone.incrementAndGet();
@@ -454,12 +473,44 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         return flushCycle.updateAndGet((x) -> {if (x == syncIteration) return 0; return x+1;}) == 0;
     }
 
+    private static String progressBar(int percent, int width) {
+        int filled = (int)(width * percent / 100.0);
+
+        char[] bar = new char[width + 2];
+        for (int i = filled + 1; i <= width; i++)
+            bar[i] = ' ';
+
+        for (int i = 1; i <= filled; i++)
+            bar[i] = '=';
+
+        bar[0] = '[';
+        bar[width + 1] = ']';
+
+        return String.valueOf(bar) + ' ' + percent + '%';
+    }
+
+    private static String formatDuration(long estimate, Long avgTrafficInWindow, ChronoUnit chronoUnit) {
+        if (avgTrafficInWindow == null || avgTrafficInWindow == 0L) return "--:-";
+        Duration duration = Duration.of(estimate / avgTrafficInWindow, chronoUnit);
+        return DurationFormatUtils.formatDurationWords(duration.toMillis(), true, true);
+    }
+
     private Runnable statisticsRunnable = () -> {
         try {
             int prevLen = 0;
+            EvictingQueue<Long> trafficWindow = EvictingQueue.create(PROGRESS_BAR_WINDOW);
             while (!Thread.currentThread().isInterrupted()) {
-                String message = String.format("\rSpeed: %s/s Files: %d/%d Blocks: %d Threads: %d ",
-                        FileUtils.byteCountToDisplaySize(trafficInSecond.getAndSet(0L)),
+                long traffic = trafficInSecond.getAndSet(0L);
+                trafficWindow.add(traffic);
+                Long avgTrafficInWindow = trafficWindow.stream().reduce(0L, (a, b) -> a + b) / trafficWindow.size();
+
+                long bTP = bytesToProcess.get();
+                long bP = bytesProcessed.get();
+
+                String message = String.format("\r\t%s\tETA: %s Speed: %s/s Files: %d/%d Blocks: %d Threads: %d ",
+                        progressBar((int) (bP * 100.0 / bTP), progressBarWidth),
+                        formatDuration(bTP - bP, avgTrafficInWindow, ChronoUnit.SECONDS),
+                        FileUtils.byteCountToDisplaySize(traffic),
                         filesDone.get(), filesToProcess.get(), blocksDone.get(), threadsActive.get()
                 );
                 String paddedMessage = StringUtils.rightPad(message, prevLen);
@@ -552,7 +603,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 if (verbose.length > 1)
                     System.err.println("Finished all submitting " + submitted.size());
                 CountDownLatch latch = new CountDownLatch(1);
-                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[submitted.size()])).thenRunAsync(() -> {
+                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally((t) -> null).thenRunAsync(() -> {
                     try {
                         if (verbose.length > 1)
                             System.err.println("Terminating pool");

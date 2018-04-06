@@ -34,6 +34,25 @@ public class DistributedGetTest extends HdfsTestSuite {
     }
 
     @Test
+    public void getEmptyFile() throws Exception {
+        generateFile(0, blockLen, TEST_FILE_TXT1, 0);
+        getCluster().copyToHDFS(TEST_FILE_TXT1.toString(), "/" + TEST_FILE_TXT1.getFileName());
+
+        assertFalse(Files.exists(TEST_FILE_TXT));
+
+        DistributedGet distributedGet = new DistributedGet();
+        distributedGet.setConf(getCluster().config.configuration);
+
+        assertEquals(0, distributedGet.run(new String[]{"-v", "/" + TEST_FILE_TXT1.getFileName(), "./" + TEST_FILE_TXT.toString()}));
+
+        List<Path> local = Files.list(Paths.get(UNIVERSE)).collect(Collectors.toList());
+
+        assertEquals(4, local.size());
+
+        assertEquals(0, Files.size(TEST_FILE_TXT));
+    }
+
+    @Test
     public void distributedSimple() throws Exception {
         String testFileDir = "/" + TEST_FILE_TXT1.getFileName() + ".distributed";
         getCluster().getFS().mkdirs(new org.apache.hadoop.fs.Path(testFileDir));
