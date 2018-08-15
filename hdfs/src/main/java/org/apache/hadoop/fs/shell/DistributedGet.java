@@ -154,21 +154,17 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         if (versioned) {
             Path success = new Path(item.path.getParent(), versionedSuccessFile + item.path.getName());
 
-            if (verbose.length > 2)
-                System.err.println("Success: " + success);
+            log(2, "Success: ", success);
             if (fs.exists(success)) {
                 FileStatus[] versions = fs.listStatus(item.path.getParent(), new PrefixFileFilter(item.path.getName()));
-                if (verbose.length > 2)
-                    System.err.println("Versions: " + versions.length);
+                log(2, "Versions: ", versions.length);
                 if (versions.length > 0) {
                     FileStatus successStatus = fs.getFileStatus(success);
                     long ts = successStatus.getModificationTime();
                     for (int i = versions.length - 1; i >= 0; i--) {
-                        if (verbose.length > 2)
-                            System.err.println("Version: " + i + " " + versions[i].getModificationTime() + " V " + ts);
+                        log(2, "Version: ", i, " ", versions[i].getModificationTime(), " V ", ts);
                         if (versions[i].getModificationTime() < ts) {
-                            if (verbose.length > 2)
-                                System.err.println("Processing " + i + " " + versions[i].getPath());
+                            log(2, "Processing ", i, " ", versions[i].getPath());
                             super.processPathArgument(new PathData(versions[i].getPath().toString(), getConf()));
                             return;
                         }
@@ -176,8 +172,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 }
             }
         } else if (fs.exists(distributedFile)) {
-            if (verbose.length > 2)
-                System.err.println("Converting path to distributed " + item.path);
+            log(2, "Converting path to distributed ", item.path);
             super.processPathArgument(new PathData(distributedFile.toString(), getConf()));
             return;
         }
@@ -188,14 +183,12 @@ public class DistributedGet extends CommandWithDestination implements Tool {
     @Override
     protected void recursePath(PathData src) throws IOException {
         if (src.stat.isDirectory() && src.path.toString().endsWith(distributedSuffix)) {
-            if (verbose.length > 2)
-                System.err.println("Processing path as distributed " + src.path);
+            log(2, "Processing path as distributed ", src.path);
             src.fs.setVerifyChecksum(true);
             submitted.add(getDistributedFile(src.path, dst.toFile()).thenAccept((p) -> {
                 if (!preserveAttrs) return;
                 Path distPath = new Path(src.path, distributedAttributesFile);
-                if (verbose.length > 2)
-                    System.err.println("Set timestamp for file " + p + " from distributed " + distPath );
+                log(2, "Set timestamp for file ", p, " from distributed ", distPath );
                 try {
                     FileStatus attributesStat = src.fs.getFileStatus(distPath);
                     dst.fs.setTimes(
@@ -206,8 +199,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                             attributesStat.getPermission());
                 } catch (IOException e) {
                     exceptions.add(e);
-                    if (verbose.length > 0)
-                        System.err.println("Failed to set attributes: " + p);
+                    log(0, "Failed to set attributes: ", p);
                     throw new CompletionException(e);
                 }
             }));
@@ -221,8 +213,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         src.fs.setVerifyChecksum(true);
         submitted.add(getFile(src.path, target.toFile()).thenAccept((p) -> {
             if (!preserveAttrs) return;
-            if (verbose.length > 2)
-                System.err.println("Set timestamp for file " + p + " from " + src.path );
+            log(2, "Set timestamp for file ", p, " from ", src.path );
             try {
                 dst.fs.setTimes(
                         p,
@@ -232,8 +223,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                         src.stat.getPermission());
             } catch (IOException e) {
                 exceptions.add(e);
-                if (verbose.length > 0)
-                    System.err.println("Failed to set attributes: " + p);
+                log(0, "Failed to set attributes: ", p);
                 throw new CompletionException(e);
             }
         }));
@@ -246,8 +236,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
             if (!local.exists()) throw new IOException("Target dir doesn't exist: " + local.toString());
             localFile = unversionFileName(remote, local);
         } else localFile = local;
-        if (verbose.length > 1)
-            System.err.println("Copying '" + remote.toString() + "' to '" + localFile.toString() + "'");
+        log(1, "Copying '", remote.toString(), "' to '", localFile.toString(), "'");
 
         URI nnURI = FileSystem.getDefaultUri(getConf());
 
@@ -279,15 +268,13 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         remoteIS.close();
 
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply((v) -> {
-            if (verbose.length > 1)
-                System.err.println("Closing file: " + localFile.toString());
+            log(1, "Closing file: ", localFile.toString());
             try {
                 localOut.close();
                 filesDone.incrementAndGet();
             } catch (IOException e) {
                 exceptions.add(e);
-                if (verbose.length > 0)
-                    System.err.println("Failed to close file " + localFile.toString());
+                log(0, "Failed to close file ", localFile.toString());
                 throw new CompletionException(e);
             }
             return new Path(localFile.toURI());
@@ -319,8 +306,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
             if (!local.exists()) throw new IOException("Target dir doesn't exist: " + local.toString());
             localFile = unversionFileName(remote, undistributeFileName(remote, local));
         } else localFile = local;
-        if (verbose.length > 1)
-            System.err.println("Distributed copying '" + remote.toString() + "' to '" + localFile.toString() + "'");
+        log(1, "Distributed copying '", remote.toString(), "' to '", localFile.toString(), "'");
         URI nnURI = FileSystem.getDefaultUri(getConf());
 
         DistributedFileSystem fs = new DistributedFileSystem();
@@ -361,15 +347,13 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         }
 
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply((v) -> {
-            if (verbose.length > 1)
-                System.err.println("Closing file: " + localFile.toString());
+            log(1, "Closing file: ", localFile.toString());
             try {
                 localOut.close();
                 filesDone.incrementAndGet();
             } catch (IOException e) {
                 exceptions.add(e);
-                if (verbose.length > 0)
-                    System.err.println("Failed to close file " + localFile.toString());
+                log(0, "Failed to close file ", localFile.toString());
                 throw new CompletionException(e);
             }
             return new Path(localFile.toURI());
@@ -387,8 +371,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 int retries = 3;
                 while (retries > 0) {
                     try {
-                        if (verbose.length > 2)
-                            System.err.println("Copying " + blockAndFile + " retry " + retries);
+                        log(2, "Copying ", blockAndFile, " retry ", retries);
                         copyBlock(block, fs, pathName, bufferSize, localOut, blockAndFile);
                         Thread.currentThread().setName("Copying thread: waiting");
                         return;
@@ -396,8 +379,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                         System.err.println("Failed to copy " + blockAndFile + " retries left: " + retries);
                         exceptions.add(e);
                         if (--retries <= 0) {
-                            if (verbose.length > 0)
-                                System.err.println("Retries for reading done " + blockAndFile);
+                            log(0, "Retries for reading done ", blockAndFile);
                             throw new CompletionException(e);
                         }
                     } catch (InterruptedException e) {
@@ -413,8 +395,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
     protected void copyBlock(DistributedBlock block, DistributedFileSystem fs, String fileName, int bufferSize, LazyAsyncFileChannel outFile, String blockAndFile) throws IOException, InterruptedException {
         long len = block.getBlockSize();
-        if (verbose.length > 2)
-            System.err.println("Copying block: start " + len);
+        log(2, "Copying block: start ", len);
         if (len == 0) {
             System.err.println(blockAndFile + " is zero size");
             return;
@@ -439,22 +420,18 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
             cur += readBytes;
             buffer.flip();
-            if (verbose.length > 3)
-                System.err.println("Read " + cur + " bytes out of " + block.getBlockSize() + " " + blockAndFile);
+            log(3, "Read ", cur, " bytes out of ", block.getBlockSize(), " ", blockAndFile);
 
             if (cur > block.getBlockSize()) break;
 
             try {
-                if (verbose.length > 3)
-                    System.err.println("Writing: " + buffer.remaining() + " pos: " + (block.getStartOffset() + cur - readBytes) + " out: " + outFile.get().isOpen());
+                log(3, "Writing: ", buffer.remaining(), " pos: ", (block.getStartOffset() + cur - readBytes), " out: ", outFile.get().isOpen());
                 Integer written = outFile.get().write(buffer, block.getStartOffset() + cur - readBytes).get();
                 bytesProcessed.addAndGet(written);
-                if (verbose.length > 3)
-                    System.err.println("Written: " + written);
+                log(3, "Written: ", written);
                 if (sync && needToFlush()) {
                     outFile.get().force(false);
-                    if (verbose.length > 3)
-                        System.err.println("Synced");
+                    log(3, "Synced");
                 }
             } catch (InterruptedException | ExecutionException e) {
                 throw new IOException("Failed to write block data", e);
@@ -463,8 +440,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
         } while (cur < block.getBlockSize());
 
-        if (verbose.length > 2)
-            System.err.println("Copying block: finish " + len + " " + blockAndFile);
+        log(2, "Copying block: finish ", len, " ", blockAndFile);
         file.close();
         blocksDone.incrementAndGet();
     }
@@ -591,8 +567,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
         if (limitRateArg > 0) {
             limitRate = Throttle.create(limitRateArg);
-            if (verbose.length > 1)
-                System.err.println("Limiting stream with " + limitRateArg);
+            log(1, "Limiting stream with ", limitRateArg);
         }
 
         try {
@@ -600,13 +575,11 @@ public class DistributedGet extends CommandWithDestination implements Tool {
             processRawArguments(inputFiles);
         } finally {
             try {
-                if (verbose.length > 1)
-                    System.err.println("Finished all submitting " + submitted.size());
+                log(1, "Finished all submitting ", submitted.size());
                 CountDownLatch latch = new CountDownLatch(1);
                 CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally((t) -> null).thenRunAsync(() -> {
                     try {
-                        if (verbose.length > 1)
-                            System.err.println("Terminating pool");
+                        log(1, "Terminating pool");
                         threadPool.shutdown();
                     } finally {
                         latch.countDown();
@@ -614,8 +587,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 });
                 latch.await(wait, TimeUnit.SECONDS);
 
-                if (verbose.length > 1)
-                    System.err.println("Latch done");
+                log(1, "Latch done");
 
                 if (!threadPool.awaitTermination(wait, TimeUnit.SECONDS)) {
                     System.err.println("Thread pool failed to terminate in " + wait + " seconds");
@@ -623,8 +595,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
             } catch (InterruptedException | CompletionException e) {
                 threadPool.shutdownNow();
 
-                if (verbose.length > 1)
-                    System.err.println("Interrupted exception: " + e.getMessage());
+                log(1, "Interrupted exception: ", e.getMessage());
 
                 Thread.currentThread().interrupt();
             }
@@ -634,6 +605,16 @@ public class DistributedGet extends CommandWithDestination implements Tool {
     public static void main(String[] args) throws Exception {
         int res = ToolRunner.run(new Configuration(), new DistributedGet(), args);
         System.exit(res);
+    }
+
+    private void log(int verbosity, Object... args) {
+        if (verbose.length > verbosity) {
+            StringBuilder builder = new StringBuilder();
+            for (Object log : args) {
+                builder.append(log);
+            }
+            System.err.println(builder.toString());
+        }
     }
 
     private static class DistributedBlock {

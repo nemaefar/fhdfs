@@ -163,8 +163,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             finalizer = () -> {
                 Path success = new Path(dstPath.getParent(), versionedSuccessFile + dstPath.getName());
                 long timestamp = System.currentTimeMillis();
-                if (verbose.length > 2)
-                    System.err.println("Set timestamp for file " + success + " : " + timestamp );
+                log(2, "Set timestamp for file ", success, " : ", timestamp );
                 try {
                     if (fs.exists(success)) {
                         fs.setTimes(success, timestamp, -1);
@@ -172,8 +171,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                         fs.create(success).close();
                     }
                 } catch (IOException e) {
-                    if (verbose.length > 0)
-                        System.err.println("Failed to create " + success);
+                    log(0, "Failed to create ", success);
                     if (verbose.length > 2)
                         e.printStackTrace();
                     throw new CompletionException(e);
@@ -187,14 +185,12 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
     protected Path eraseOldVersioned(FileSystem fs, Path to) throws IOException {
         FileStatus[] oldVersions = fs.listStatus(to.getParent(), new PrefixFileFilter(to.getName()));
-        if (verbose.length > 1)
-            System.err.println("Old versions: " + oldVersions.length);
+        log(1, "Old versions: ", oldVersions.length);
 
         Path target = fs.makeQualified(new Path(to.toString() + versionedSuffix + Long.toString(System.currentTimeMillis())));
 
         for (int i = 0; i < (oldVersions.length - numVersions + 1); i++) {
-            if (verbose.length > 2)
-                System.err.println("Deleting old: " + oldVersions[i].getPath().toString());
+            log(2, "Deleting old: ", oldVersions[i].getPath().toString());
             fs.delete(oldVersions[i].getPath(), true);
         }
 
@@ -214,8 +210,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         src.fs.setVerifyChecksum(true);
         submitted.add(putFile(src.toFile(), target.path).thenAccept((p) -> {
             if (!preserveAttrs) return;
-            if (verbose.length > 2)
-                System.err.println("Set timestamp for file " + p + " from " + src.path );
+            log(2, "Set timestamp for file ", p, " from ", src.path );
             try {
                 target.fs.setTimes(
                         p,
@@ -224,8 +219,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                         p,
                         src.stat.getPermission());
             } catch (IOException e) {
-                if (verbose.length > 0)
-                    System.err.println("Failed to set attributes for " + p);
+                log(0, "Failed to set attributes for ", p);
                 if (verbose.length > 2)
                     e.printStackTrace();
                 throw new CompletionException(e);
@@ -234,8 +228,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
     }
 
     private CompletableFuture<Path> putFile(File from, Path to) throws IOException {
-        if (verbose.length > 0)
-            System.err.println("File: " + from);
+        log(0, "File: ", from);
         filesToProcess.incrementAndGet();
         URI nnURI = FileSystem.getDefaultUri(getConf());
 
@@ -250,8 +243,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         bytesToProcess.addAndGet(from.length());
 
         if (from.length() <= blockSize) {
-            if (verbose.length > 1)
-                System.err.println("Short-cut for one-block file: " + from.getName());
+            log(1, "Short-cut for one-block file: ", from.getName());
             return CompletableFuture.supplyAsync(() -> {
                 Thread.currentThread().setName("Copying thread: copying file '" + from.getName() + "'");
 
@@ -276,8 +268,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                     filesDone.incrementAndGet();
                     blocksDone.incrementAndGet();
                 } catch (IOException e) {
-                    if (verbose.length > 0)
-                        System.err.println("Failed to copy file '" + from.getName() + "'");
+                    log(0, "Failed to copy file '", from.getName(), "'");
                     if (verbose.length > 2)
                         e.printStackTrace();
                     throw new CompletionException(e);
@@ -292,14 +283,12 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         } else {
             long blocks = from.length() / blockSize;
             if (from.length() % blockSize != 0) blocks++; // protection from files, splittable for exact number of blocks
-            if (verbose.length > 1)
-                System.err.println("Will be copying " + blocks + " blocks for '" + from.getName() + "'");
+            log(1, "Will be copying ", blocks, " blocks for '", from.getName(), "'");
             LazyAsyncFileChannel localIn = new LazyAsyncFileChannel(from.toPath(), StandardOpenOption.READ);
             Path parent = new Path(target.toString() + distributedSuffix);
 
             if (fs.exists(parent)) {
-                if (verbose.length > 1)
-                    System.err.println("Target distributed dir exists: " + parent);
+                log(1, "Target distributed dir exists: ", parent);
                 if (overwrite)
                     fs.delete(parent, true);
                 else
@@ -322,8 +311,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                         int retries = 3;
                         while (retries > 0) {
                             try {
-                                if (verbose.length > 1)
-                                    System.err.println("Copying " + blockAndFile + " retry " + retries);
+                                log(1, "Copying ", blockAndFile, " retry ", retries);
                                 putBlock(localIn, fs, output, startOffset, Math.min(blockSize, from.length() - startOffset), bufferSize, blockAndFile);
                                 Thread.currentThread().setName("Copying thread: waiting");
                                 return;
@@ -331,8 +319,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                                 System.err.println("Failed to copy " + blockAndFile + " retries left: " + retries);
                                 e.printStackTrace();
                                 if (--retries <= 0) {
-                                    if (verbose.length > 0)
-                                        System.err.println("Retries for writing done '" + blockAndFile + "'");
+                                    log(0, "Retries for writing done '", blockAndFile, "'");
                                     if (verbose.length > 2)
                                         e.printStackTrace();
                                     throw new CompletionException(e);
@@ -349,15 +336,13 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             }
 
             return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply((v) -> {
-                if (verbose.length > 1)
-                    System.err.println("Closing file: " + to);
+                log(1, "Closing file: ", to);
                 Path attributesFile = new Path(parent, distributedAttributesFile);
                 try {
                     localIn.close();
                     filesDone.incrementAndGet();
                 } catch (IOException e) {
-                    if (verbose.length > 0)
-                        System.err.println("Failed to close input file " + from);
+                    log(0, "Failed to close input file ", from);
                     if (verbose.length > 2)
                         e.printStackTrace();
                     throw new CompletionException(e);
@@ -366,8 +351,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                     try {
                         fs.create(attributesFile).close();
                     } catch (IOException e) {
-                        if (verbose.length > 0)
-                            System.err.println("Failed to create attributes file " + attributesFile);
+                        log(0, "Failed to create attributes file ", attributesFile);
                         if (verbose.length > 2)
                             e.printStackTrace();
                         throw new CompletionException(e);
@@ -379,8 +363,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
     }
 
     private void putBlock(LazyAsyncFileChannel localIn, DistributedFileSystem fs, Path output, long startOffset, long blockSize, int bufferSize, String blockAndFile) throws IOException, InterruptedException {
-        if (verbose.length > 2)
-            System.err.println("START Copying block: " + blockAndFile + " with length " + blockSize);
+        log(2, "START Copying block: ", blockAndFile, " with length ", blockSize);
         ByteBuffer buffer = ByteBuffer.allocate(bufferSize * 2);
         String pathName = fs.makeQualified(output).toUri().getPath();
         OutputStream outputStream = fs.getClient().create(pathName, overwrite);
@@ -406,8 +389,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
             cur += readBytes;
             buffer.flip();
-            if (verbose.length > 3)
-                System.err.println("Read " + cur + " bytes out of " + blockSize + " " + blockAndFile);
+            log(3, "Read ", cur, " bytes out of ", blockSize, " ", blockAndFile);
 
             if (cur > blockSize) break;
 
@@ -422,8 +404,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         writableByteChannel.close();
         outputStream.close();
         blocksDone.incrementAndGet();
-        if (verbose.length > 1)
-            System.err.println("END Copying block: " + blockAndFile);
+        log(1, "END Copying block: ", blockAndFile);
     }
 
 
@@ -545,8 +526,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         threadPool = Executors.newFixedThreadPool(threads);
         if (limitRateArg > 0) {
             limitRate = Throttle.create(limitRateArg);
-            if (verbose.length > 1)
-                System.err.println("Limiting stream with " + limitRateArg);
+            log(1, "Limiting stream with ", limitRateArg);
         }
 
         if (verbose.length > 2)
@@ -557,18 +537,15 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             processRawArguments(inputFiles);
         } finally {
             try {
-                if (verbose.length > 1)
-                    System.err.println("Finished all submitting " + submitted.size());
+                log(1, "Finished all submitting ", submitted.size());
                 CountDownLatch latch = new CountDownLatch(1);
                 CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally((t) -> null).thenRunAsync(() -> {
                     try {
                         if (finalizer != null) {
-                            if (verbose.length > 1)
-                                System.err.println("Running finalizer");
+                            log(1, "Running finalizer");
                             finalizer.run();
                         }
-                        if (verbose.length > 1)
-                            System.err.println("Terminating pool");
+                        log(1, "Terminating pool");
                         threadPool.shutdown();
                     } finally {
                         latch.countDown();
@@ -576,8 +553,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                 });
                 latch.await(wait, TimeUnit.SECONDS);
 
-                if (verbose.length > 1)
-                    System.err.println("Latch done");
+                log(1, "Latch done");
 
                 if (!threadPool.awaitTermination(wait, TimeUnit.SECONDS)) {
                     System.err.println("Thread pool failed to terminate in " + wait + " seconds");
@@ -585,11 +561,20 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             } catch (InterruptedException | CompletionException e) {
                 threadPool.shutdownNow();
 
-                if (verbose.length > 1)
-                    System.err.println("Interrupted exception: " + e.getMessage());
+                log(1, "Interrupted exception: ", e.getMessage());
 
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    private void log(int verbosity, Object... args) {
+        if (verbose.length > verbosity) {
+            StringBuilder builder = new StringBuilder();
+            for (Object log : args) {
+                builder.append(log);
+            }
+            System.err.println(builder.toString());
         }
     }
 
