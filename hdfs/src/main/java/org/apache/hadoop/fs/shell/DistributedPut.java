@@ -89,6 +89,9 @@ public class DistributedPut extends CommandWithDestination implements Tool {
     @Option(names = {"-f", "--overwrite"}, description = "Overwrite the destination if it already exists")
     protected boolean overwrite = false;
 
+    @Option(names = {"-t", "--notSplitFile"}, description = "Do not split file into blocks (slower, but compatible with native client)")
+    protected boolean notSplittingFile = false;
+
     @Option(names = {"-l", "--limit-rate"},
             description = "Limit upload speed, measured in bytes per second. It is possible to add suffix 'k' for kilobytes or 'm' for megabytes per second",
             converter = SuffixArgConverter.class)
@@ -242,8 +245,8 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
         bytesToProcess.addAndGet(from.length());
 
-        if (from.length() <= blockSize) {
-            log(1, "Short-cut for one-block file: ", from.getName());
+        if (from.length() <= blockSize || notSplittingFile) {
+            log(1, "Short-cut for one-block file: ", from.getName(), " or not splitting file: ", notSplittingFile);
             return CompletableFuture.supplyAsync(() -> {
                 Thread.currentThread().setName("Copying thread: copying file '" + from.getName() + "'");
 
