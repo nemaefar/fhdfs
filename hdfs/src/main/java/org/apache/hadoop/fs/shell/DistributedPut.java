@@ -89,7 +89,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
     @Option(names = {"-f", "--overwrite"}, description = "Overwrite the destination if it already exists")
     protected boolean overwrite = false;
 
-    @Option(names = {"-t", "--notSplitFile"}, description = "Do not split file into blocks (slower, but compatible with native client)")
+    @Option(names = {"-o", "--notSplitFile"}, description = "Do not split file into blocks (slower, but compatible with native client)")
     protected boolean notSplittingFile = false;
 
     @Option(names = {"-l", "--limit-rate"},
@@ -263,6 +263,9 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                             limitRate.acquire(bytesRead);
                         trafficTotal.addAndGet(bytesRead);
                         outputStream.write(buf, 0, bytesRead);
+
+                        bytesProcessed.addAndGet(bytesRead);
+
                         bytesRead = inputStream.read(buf);
                     }
 
