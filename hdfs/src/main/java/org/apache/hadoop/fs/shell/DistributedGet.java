@@ -118,6 +118,9 @@ public class DistributedGet extends CommandWithDestination implements Tool {
     @Option(names = {"-n", "--num"}, description = "Check if file is versioned - get only the latest one")
     protected boolean versioned = false;
 
+    @Option(names = {"-q", "--fail"}, description = "Fail on any error immediately")
+    protected boolean failImmediately = false;
+
     @Option(names = { "-h", "--help" }, usageHelp = true,
             description = "Displays this help message and quits.")
     private boolean helpRequested = false;
@@ -605,6 +608,8 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
     private Void processThrowable(Throwable t) {
         if (t instanceof Exception) {
+            if (failImmediately)
+                throw new RuntimeException(t);
             displayError((Exception)t);
         } else {
             throw new RuntimeException(t);

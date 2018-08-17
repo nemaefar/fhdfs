@@ -124,6 +124,9 @@ public class DistributedPut extends CommandWithDestination implements Tool {
     @Option(names = {"-n", "--num"}, description = "Number of versions of the same file/dir to keep (if 1 or less will act as not set)")
     protected int numVersions = 1;
 
+    @Option(names = {"-q", "--fail"}, description = "Fail on any error immediately")
+    protected boolean failImmediately = false;
+
     @Option(names = { "-h", "--help" }, usageHelp = true,
             description = "Displays this help message and quits.")
     protected boolean helpRequested = false;
@@ -576,6 +579,8 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
     private Void processThrowable(Throwable t) {
         if (t instanceof Exception) {
+            if (failImmediately)
+                throw new RuntimeException(t);
             displayError((Exception)t);
         } else {
             throw new RuntimeException(t);
