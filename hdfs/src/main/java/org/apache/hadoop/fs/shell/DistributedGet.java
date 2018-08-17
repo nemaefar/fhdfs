@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class DistributedGet extends CommandWithDestination implements Tool {
 
     private ExecutorService threadPool;
+    private CountDownLatch latch;
 
     private Throttle limitRate = null;
 
@@ -205,7 +206,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                     log(0, "Failed to set attributes: ", p);
                     throw new CompletionException(e);
                 }
-            }));
+            }).exceptionally(this::processThrowable));
         } else {
             super.recursePath(src);
         }
@@ -229,7 +230,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 log(0, "Failed to set attributes: ", p);
                 throw new CompletionException(e);
             }
-        }));
+        }).exceptionally(this::processThrowable));
     }
 
     protected CompletableFuture<Path> getFile(Path remote, File local) throws IOException {
@@ -502,6 +503,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 Thread.sleep(sleep);
             }
         } catch (InterruptedException ignored) {
+            System.err.println();
         }
     };
 
@@ -546,7 +548,17 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                     statisticsThread.interrupt();
 
         } catch (IOException e) {
-            displayError(e);
+            exceptions.add(e);
+        }
+        for (Exception exception : exceptions) {
+            String errorMessage = exception.getLocalizedMessage();
+            if (errorMessage == null) {
+                errorMessage = org.apache.hadoop.util.StringUtils.stringifyException(exception);
+            } else {
+                errorMessage = errorMessage.split("\n", 2)[0];
+            }
+            numErrors++;
+            displayError(errorMessage);
         }
 
         if (verbose.length > 2)
@@ -580,7 +592,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
         } finally {
             try {
                 log(1, "Finished all submitting ", submitted.size());
-                CountDownLatch latch = new CountDownLatch(1);
+                latch = new CountDownLatch(1);
                 CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally(this::processThrowable).thenRunAsync(() -> {
                     try {
                         log(1, "Terminating pool");
@@ -608,11 +620,14 @@ public class DistributedGet extends CommandWithDestination implements Tool {
 
     private Void processThrowable(Throwable t) {
         if (t instanceof Exception) {
-            if (failImmediately)
-                throw new RuntimeException(t);
-            displayError((Exception)t);
+            exceptions.add((Exception)t);
         } else {
-            throw new RuntimeException(t);
+            exceptions.add(new Exception(t));
+        }
+        if (failImmediately) {
+            log(1, "Failing immediately: ", t.getMessage());
+            latch.countDown();
+            threadPool.shutdownNow();
         }
         return null;
     }

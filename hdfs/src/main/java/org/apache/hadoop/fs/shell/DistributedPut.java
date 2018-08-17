@@ -37,7 +37,6 @@ import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 
 @Command(name = "fhdfs [cluster] put",
         description = "fhdfs put can be used as a replacement of a standard HDFS CLI as it is working in parallel",
@@ -53,6 +52,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
     private static final String DISTRIBUTED_VERSION_PATTERN = "%05d";
 
     private ExecutorService threadPool;
+    private CountDownLatch latch;
 
     private Throttle limitRate = null;
 
@@ -230,7 +230,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                     e.printStackTrace();
                 throw new CompletionException(e);
             }
-        }));
+        }).exceptionally(this::processThrowable));
     }
 
     private CompletableFuture<Path> putFile(File from, Path to) throws IOException {
@@ -467,6 +467,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                 Thread.sleep(sleep);
             }
         } catch (InterruptedException ignored) {
+            System.err.println();
         }
     };
 
@@ -511,7 +512,17 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                     statisticsThread.interrupt();
 
         } catch (IOException e) {
-            displayError(e);
+            exceptions.add(e);
+        }
+        for (Exception exception : exceptions) {
+            String errorMessage = exception.getLocalizedMessage();
+            if (errorMessage == null) {
+                errorMessage = org.apache.hadoop.util.StringUtils.stringifyException(exception);
+            } else {
+                errorMessage = errorMessage.split("\n", 2)[0];
+            }
+            numErrors++;
+            displayError(errorMessage);
         }
 
         if (verbose.length > 2)
@@ -547,7 +558,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
         } finally {
             try {
                 log(1, "Finished all submitting ", submitted.size());
-                CountDownLatch latch = new CountDownLatch(1);
+                latch = new CountDownLatch(1);
                 CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally(this::processThrowable).thenRunAsync(() -> {
                     try {
                         if (finalizer != null) {
@@ -579,11 +590,14 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
     private Void processThrowable(Throwable t) {
         if (t instanceof Exception) {
-            if (failImmediately)
-                throw new RuntimeException(t);
-            displayError((Exception)t);
+            exceptions.add((Exception)t);
         } else {
-            throw new RuntimeException(t);
+            exceptions.add(new Exception(t));
+        }
+        if (failImmediately) {
+            log(1, "Failing immediately: ", t.getMessage());
+            latch.countDown();
+            threadPool.shutdownNow();
         }
         return null;
     }
