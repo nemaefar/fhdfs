@@ -450,6 +450,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
     }
 
     private static String progressBar(int percent, int width) {
+        if (percent < 0 || percent > 100) return "[ Retries detected. Statistics won't be correct ]";
         int filled = (int)(width * percent / 100.0);
 
         char[] bar = new char[width + 2];
@@ -577,7 +578,7 @@ public class DistributedGet extends CommandWithDestination implements Tool {
             try {
                 log(1, "Finished all submitting ", submitted.size());
                 CountDownLatch latch = new CountDownLatch(1);
-                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally((t) -> null).thenRunAsync(() -> {
+                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally(this::processThrowable).thenRunAsync(() -> {
                     try {
                         log(1, "Terminating pool");
                         threadPool.shutdown();
@@ -600,6 +601,15 @@ public class DistributedGet extends CommandWithDestination implements Tool {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    private Void processThrowable(Throwable t) {
+        if (t instanceof Exception) {
+            displayError((Exception)t);
+        } else {
+            throw new RuntimeException(t);
+        }
+        return null;
     }
 
     public static void main(String[] args) throws Exception {

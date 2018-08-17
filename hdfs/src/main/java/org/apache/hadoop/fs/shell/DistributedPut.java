@@ -415,6 +415,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
 
 
     private static String progressBar(int percent, int width) {
+        if (percent < 0 || percent > 100) return "[ Retries detected. Statistics won't be correct ]";
         int filled = (int)(width * percent / 100.0);
 
         char[] bar = new char[width + 2];
@@ -535,8 +536,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             log(1, "Limiting stream with ", limitRateArg);
         }
 
-        if (verbose.length > 2)
-            System.err.println("Input files: " + inputFiles.stream().collect(Collectors.joining(" ; ")));
+        log( 2, "Input files: ", String.join(" ; ", inputFiles));
 
         try {
             processOptions(inputFiles);
@@ -545,7 +545,7 @@ public class DistributedPut extends CommandWithDestination implements Tool {
             try {
                 log(1, "Finished all submitting ", submitted.size());
                 CountDownLatch latch = new CountDownLatch(1);
-                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally((t) -> null).thenRunAsync(() -> {
+                CompletableFuture.allOf(submitted.toArray(new CompletableFuture[0])).exceptionally(this::processThrowable).thenRunAsync(() -> {
                     try {
                         if (finalizer != null) {
                             log(1, "Running finalizer");
@@ -572,6 +572,15 @@ public class DistributedPut extends CommandWithDestination implements Tool {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    private Void processThrowable(Throwable t) {
+        if (t instanceof Exception) {
+            displayError((Exception)t);
+        } else {
+            throw new RuntimeException(t);
+        }
+        return null;
     }
 
     private void log(int verbosity, Object... args) {
